@@ -1,6 +1,7 @@
 module NNSparseCoding
 using Random,Distributions
 using LinearAlgebra
+using Images, FileIO
 
 struct NNSC_optimizer{T}
   X::Matrix{T}
@@ -150,6 +151,139 @@ end
 # What follows is manipulaton of image patches and files
 
 
+# regularization types
+abstract type ReguType end
+# thou shall not broadcast!
+Base.Broadcast.broadcastable(reg::ReguType)=Ref(reg)
+
+struct NoRegu <: ReguType end
+struct StandardRegu <: ReguType end
+
+function regularize_image(img,rt::Type{NoRegu})::Matrix{Float64}
+    return convert(Array{Float64},Gray.(img))
+end
+function regularize_image(img,rt::Type{StandardRegu})::Matrix{Float64}
+    im=regularize_image(img,NoRegu)
+    _mu,_std = mean(im),std(im)
+    @. im = (im -_mu)/_std
+    return im
+end
+
+
+
+"""
+
+"""
+function read_natural_images(
+    dir,
+    sz,
+    (regu::Type{<:ReguType}) = StandardRegu;
+    rotate::Bool = true,
+    verbose::Bool = false,
+    format::String = ".jpg")::Vector{Matrix{Float64}}
+  @assert isdir(dir) "directory $dir not found!"
+  filenames = filter(f-> occursin(Regex("$format\\b"),f),  readdir(dir))
+  filenames = joinpath.(dir,filenames)
+  good_size(img, sz) = min(size(img)...) >= sz
+  @assert !isempty(filenames) "no files with extension $format found in $dir"
+  ret = Matrix{Any}[]
+  _rot_fun = rotate ? rotation_functions : [identity]
+  nfiles = length(filenames)
+  for (k, file) in enumerate(filenames)
+    verbose && println("reading file $k/$(nfiles)")
+    img = load(file)
+    if good_size(img, sz)
+      for rot in _rot_fun
+        push!(ret, rot(img))
+      end
+    else
+      @warn "image $file has size smaller than $sz , ignored"
+    end
+  end
+  return cut_patch.(regularize_image.(ret,regu),Ref(sz))
+end
+
+
+# rotate images exactly
+function rot_90(img)
+    r,c=size(img)
+    out=similar(img,c,r)
+    for cc in 1:c
+        out[cc,:] = img[end:-1:1,cc]
+    end
+    out
+end
+function rot_m90(img)
+    r,c=size(img)
+    out=similar(img,c,r)
+    for (cc,mcc) in zip(1:c,c:-1:1)
+        out[cc,:] = img[:,mcc]
+    end
+    out
+end
+function rot_180(img)
+    r,c=size(img)
+    out=similar(img)
+    for (cc,mcc) in zip(1:c,c:-1:1)
+        out[:,cc] = img[r:-1:1,mcc]
+    end
+    out
+end
+const rotation_functions = [identity , rot_90, rot_m90, rot_180 ]
+
+"""
+        function cut_patch(img, sz)
+
+cuts a random square section of size `sz` from the matrix `img`
+"""
+function cut_patch(img::AbstractArray{T}, sz) where T
+  _rows, _cols = size(img)
+  _crows,_ccols =_rows-sz+1, _cols-sz+1
+  i,j= rand(1:_crows), rand(1:_ccols)
+  return img[i:i+sz-1,j:j+sz-1]
+end
+
+"""
+    sampling_tiles(n_samples::Integer, images::Vector{Matrix{Float64}},
+        patch_size::Integer)
+Generates `n_samples` patches of size `patch_size`,
+"""
+function get_random_patches(n_samples::Integer, images::Vector{Matrix{Float64}},
+    patch_size::Integer)
+  n_img=length(images)
+  @assert !isempty(images) "images are missing!"
+  #check how many patches per image
+  n_full,n_rem = divrem(n_samples,n_img)
+  n_imgsampl = fill(n_full,n_img)
+  # add the rem, picking them randomly!
+  if n_rem>0
+    idx_rem=sample(1:n_img , n_rem ;replace=false)
+    n_imgsampl[idx_rem] .+= 1
+  end
+  @assert  sum(n_imgsampl) == n_samples "wrong selection?"
+  ret = Vector{Matrix{Float64}}(undef,n_samples)
+  k=0
+  for (im,ns) in zip(images,n_imgsampl) , s in 1:ns
+    k+=1
+    ret[k]=cut_patch(im,patch_size)
+  end
+  return ret
+end
+
+function regularize01!(mat)
+    l,u = extrema(mat)
+    @. mat = (mat-l)/(u-l)
+end
+
+function merge_mats(mats::Vector{Matrix{R}}) where R<:Real
+  sz = size(mats[1],1)
+  nmats = length(mats)
+  ret = Matrix{R}(undef,sz*sz,nmats)
+  for (k,mat) in enumerate(mats)
+    ret[:,k] .= mat[:]
+  end
+  return ret
+end
 
 
 end #module
