@@ -2,6 +2,7 @@ module NNSparseCoding
 using Random,Distributions
 using LinearAlgebra
 using Images, FileIO
+using MultivariateStats
 
 struct NNSC_optimizer{T}
   X::Matrix{T}
@@ -275,15 +276,70 @@ function regularize01!(mat)
     @. mat = (mat-l)/(u-l)
 end
 
-function merge_mats(mats::Vector{Matrix{R}}) where R<:Real
+function merge_mats(mats::Vector{Matrix{R}};
+   zeromean::Bool=true) where R<:Real
   sz = size(mats[1],1)
   nmats = length(mats)
   ret = Matrix{R}(undef,sz*sz,nmats)
   for (k,mat) in enumerate(mats)
     ret[:,k] .= mat[:]
   end
+  if zeromean
+    broadcast!(-,ret,ret,mean(ret;dims=2))
+  end
   return ret
 end
+
+# pretty much wrappers to MultivariateStats
+
+function plus_minus_parts(M::Array{T}) where T<:Real
+  plus,minus = zero(M),zero(M)
+  for i in eachindex(M)
+    @inbounds begin
+    if M[i] > 0
+      plus[i] = M[i]
+    else
+      minus[i] = -M[i]
+  end end end
+  return plus,minus
+end
+
+abstract type Preprocess end
+
+struct PreprocessWhiten <: Preprocess end
+function preprocess_plus_minus(X,::Type{PreprocessWhiten})
+  M = fit(Whitening,X)
+  @assert all(x-> isapprox(x,0.0 ; atol=1E-6),mean(M)) "The input should have zero mean!"
+  return (M, plus_minus_parts(transform(M,X))...)
+end
+function revert_plus_minus(Mp,Mm,W::Whitening)
+  return  W.W' \ (Mp - Mm)
+end
+
+
+struct PreprocessPCA <: Preprocess
+  d::Integer
+end
+
+function preprocess_plus_minus(X,p::PreprocessPCA)
+  M = fit(PCA,X;maxoutdim=p.d)
+  @assert all(x-> isapprox(x,0.0 ; atol=1E-6),mean(M)) "The input should have zero mean!"
+  return (M, plus_minus_parts(transform(M,X))...)
+end
+function revert_plus_minus(Mp,Mm,p::PCA)
+  return reconstruct(p, Mp - Mm)
+end
+
+struct PreprocessNot <: Preprocess end
+function preprocess_plus_minus(X,::Type{PreprocessNot})
+  @assert all(x-> isapprox(x,0.0 ; atol=1E-6),mean(X;dims=2)) "The input should have zero mean!"
+  return (PreprocessNot, plus_minus_parts(X)...)
+end
+function revert_plus_minus(Mp,Mm,::Type{PreprocessNot})
+  return (Mp - Mm)
+end
+
+
 
 
 end #module

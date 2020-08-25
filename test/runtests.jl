@@ -1,5 +1,6 @@
 using NNSparseCoding ; const N=NNSparseCoding
 using Test
+using Statistics
 
 @testset "Initialization" begin
     n = 200
@@ -73,45 +74,68 @@ end
     end
     @test all(isapprox.(A,Ã;atol=0.3))
 end
-
-@testset "Convergence of A, other interface" begin
+# 
+# @testset "Convergence of A, other interface" begin
+#     n = 80
+#     b = n
+#     k = 100
+#     lambda=0.1
+#     A,S = N.initialize_mats(n,b,k)
+#     # let's have a sparse S
+#     map!(s-> rand() < 0.85 ? 0.0 : 3s ,S,S)
+#     X = A*S
+#     obj = N.NNSC_optimizer(X,b,lambda)
+#     copy!(obj.S,S)
+#     N.updateAS!(obj)
+#     nsteps=5_000
+#     stepsize=0.02
+#     objval = N.nnsc_objective(obj)
+#     for _ in 1:nsteps
+#       stepsize,objval,_= N.updateA!(obj,stepsize,objval)
+#     end
+#     @test all(isapprox.(A,obj.A;atol=0.3))
+# end
+#
+# @testset "Optimization of A and S" begin
+#     n = 80
+#     b = n
+#     k = 300
+#     A,S = N.initialize_mats(n,b,k)
+#     # let's have a sparse S
+#     map!(s-> rand() < 0.95 ? 0.0 : 3s ,S,S)
+#     X = A*S
+#     lambda=0.1
+#     o = N.NNSC_optimizer(X,b,lambda)
+#     N.nnsc_objective(o)
+#     nsteps=10_000
+#     stepsize=0.02
+#     obj_temp = N.nnsc_objective(o)
+#     for _ = 1:nsteps
+#       (stepsize,obj_temp,_) = N.updateA!(o, stepsize,obj_temp)
+#       N.updateS!(o)
+#     end
+#     @test all(isapprox.(X,o.AS;atol=1.0))
+# end
+#
+@testset "Transformations" begin
     n = 80
     b = n
-    k = 100
-    lambda=0.1
+    k = 150
     A,S = N.initialize_mats(n,b,k)
-    # let's have a sparse S
     map!(s-> rand() < 0.85 ? 0.0 : 3s ,S,S)
     X = A*S
-    obj = N.NNSC_optimizer(X,b,lambda)
-    copy!(obj.S,S)
-    N.updateAS!(obj)
-    nsteps=5_000
-    stepsize=0.02
-    objval = N.nnsc_objective(obj)
-    for _ in 1:nsteps
-      stepsize,objval,_= N.updateA!(obj,stepsize,objval)
-    end
-    @test all(isapprox.(A,obj.A;atol=0.3))
-end
-
-@testset "Optimization of A and S" begin
-    n = 80
-    b = n
-    k = 300
-    A,S = N.initialize_mats(n,b,k)
-    # let's have a sparse S
-    map!(s-> rand() < 0.95 ? 0.0 : 3s ,S,S)
-    X = A*S
-    lambda=0.1
-    o = N.NNSC_optimizer(X,b,lambda)
-    N.nnsc_objective(o)
-    nsteps=10_000
-    stepsize=0.02
-    obj_temp = N.nnsc_objective(o)
-    for _ = 1:nsteps
-      (stepsize,obj_temp,_) = N.updateA!(o, stepsize,obj_temp)
-      N.updateS!(o)
-    end
-    @test all(isapprox.(X,o.AS;atol=1.0))
+    broadcast!(-,X,X,mean(X;dims=2))
+    whit,Mp,Mm = N.preprocess_plus_minus(X,N.PreprocessWhiten)
+    @test (!any(Mp .< 0)) && (!any(Mm .< 0))
+    X̃ = N.revert_plus_minus(Mp,Mm,whit)
+    @test all(isapprox.(X,X̃))
+    pcadims = 40
+    whit, Mp,Mm = N.preprocess_plus_minus(X,N.PreprocessPCA(pcadims))
+    @test (!any(Mp .< 0)) && (!any(Mm .< 0))
+    X̃ = N.revert_plus_minus(Mp,Mm,whit)
+    @test all(isapprox.(X,X̃ ; atol=2))
+    whit,Mp,Mm = N.preprocess_plus_minus(X,N.PreprocessNot)
+    @test (!any(Mp .< 0)) && (!any(Mm .< 0))
+    X̃ = N.revert_plus_minus(Mp,Mm,whit)
+    @test all(isapprox.(X,X̃))
 end
